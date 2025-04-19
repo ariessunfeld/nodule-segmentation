@@ -34,5 +34,5 @@ def reorganize_data(data_dir: Path):
     print("\nReorganization complete.")
 
 if __name__ == "__main__":
-    base = Path(__file__).parent / 'data2'
+    base = Path(__file__).parent / 'data'
     reorganize_data(base)
