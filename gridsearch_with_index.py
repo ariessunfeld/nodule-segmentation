@@ -15,20 +15,8 @@ from tqdm import tqdm
 import random
 import time
 import cv2
+from itertools import product
 
-# ─── CONFIGURATION ────────────────────────────────────────────────────────────
-# These can be easily changed
-TILE_SIZE = 512
-BATCH_SIZE = 4
-LEARNING_RATE = 5e-4
-NUM_EPOCHS = 50
-SEED = 100
-NUM_WORKERS = 0
-IMG_DIR = Path("data/tifs")
-MSK_DIR = Path("data/handcrafted_masks")
-OUT_IMG = Path("tiles/images")
-OUT_MSK = Path("tiles/masks")
-INDEX_CSV = Path("data/index.csv")
 
 # ─── DEVICE SELECTION ────────────────────────────────────────────────────────
 def select_device():
@@ -43,6 +31,7 @@ def select_device():
         print("🧠 Using CPU")
     return device
 
+
 # ─── SET SEED ───────────────────────────────────────────────────────────────
 def set_seed(seed: int):
     random.seed(seed)
@@ -56,6 +45,7 @@ def set_seed(seed: int):
     if torch.backends.mps.is_available():
         torch.manual_seed(seed)
 
+
 # ─── MASK VERIFICATION HELPER ───────────────────────────────────────────────
 def verify_mask(arr: np.ndarray) -> np.ndarray:
     if arr.ndim != 2 or not np.array_equal(np.unique(arr), [0, 255]):
@@ -63,6 +53,7 @@ def verify_mask(arr: np.ndarray) -> np.ndarray:
         a = np.array(gray)
         return (a >= 255).astype(np.uint8) * 255
     return arr
+
 
 # ─── TILING FUNCTION ───────────────────────────────────────────────────────
 def create_tiles(img_dir, msk_dir, out_img, out_msk, tile_size):
@@ -106,6 +97,7 @@ def create_tiles(img_dir, msk_dir, out_img, out_msk, tile_size):
 
     print("✅ Tiling complete!")
 
+
 # ─── SPLIT TILES BASED ON INDEX.CSV ────────────────────────────────────────
 def split_tiles_by_index(img_tiles_dir, msk_tiles_dir, index_csv):
     df = pd.read_csv(index_csv)
@@ -145,6 +137,7 @@ def split_tiles_by_index(img_tiles_dir, msk_tiles_dir, index_csv):
     
     return train_images, train_masks, val_images, val_masks
 
+
 # ─── DATASET CLASS ────────────────────────────────────────────────────────
 class TiledSegmentationDataset(Dataset):
     def __init__(self, images, masks, tile_size, transform=None):
@@ -174,15 +167,19 @@ class TiledSegmentationDataset(Dataset):
 
         return img, mask
 
+
 # ─── COMBINED LOSS ────────────────────────────────────────────────────────
 class CombinedLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, dice_weight=1.0, bce_weight=1.0):
         super().__init__()
         self.dice = smp.losses.DiceLoss(mode='binary')
         self.bce = nn.BCEWithLogitsLoss()
+        self.dice_weight = dice_weight
+        self.bce_weight = bce_weight
 
     def forward(self, outputs, targets):
-        return self.dice(outputs, targets) + self.bce(outputs, targets)
+        return self.dice_weight * self.dice(outputs, targets) + self.bce_weight * self.bce(outputs, targets)
+
 
 # ─── TRAINING FUNCTION ────────────────────────────────────────────────────
 def train_one_epoch(model, dataloader, optimizer, loss_fn, device):
@@ -228,6 +225,7 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, device):
         "accuracy": total_accuracy / num_batches
     }
 
+
 # ─── VALIDATION FUNCTION ─────────────────────────────────────────────────
 def validate(model, dataloader, loss_fn, device):
     model.eval()
@@ -268,17 +266,42 @@ def validate(model, dataloader, loss_fn, device):
         "accuracy": total_accuracy / num_batches
     }
 
-# ─── MAIN EXECUTION ──────────────────────────────────────────────────────
-def main():
-    # Set up device and seed
+
+# ─── CONSOLIDATED TRAINING FUNCTION FOR GRID SEARCH ─────────────────────────
+def train_model_with_hyperparams(
+    img_dir=Path("data/tifs"), 
+    msk_dir=Path("data/handcrafted_masks"),
+    index_csv=Path("data/index.csv"),
+    tile_size=512,
+    batch_size=4,
+    learning_rate=5e-4,
+    num_epochs=50,
+    optimizer_name="adam",
+    dice_weight=1.0,
+    bce_weight=1.0,
+    seed=100,
+    num_workers=0
+):
+    """
+    Train a model with the given hyperparameters and return the best validation IoU
+    along with the hyperparameters used.
+    
+    Returns:
+        dict: A dictionary containing the best validation IoU and the hyperparameters used
+    """
+    # Setup
     device = select_device()
-    set_seed(SEED)
+    set_seed(seed)
+    
+    # Create temporary directories for tiles
+    out_img = Path(f"tiles_{tile_size}/images")
+    out_msk = Path(f"tiles_{tile_size}/masks")
     
     # Create tiles - wiped and redone each time
-    create_tiles(IMG_DIR, MSK_DIR, OUT_IMG, OUT_MSK, TILE_SIZE)
+    create_tiles(img_dir, msk_dir, out_img, out_msk, tile_size)
     
     # Split tiles based on index.csv
-    train_images, train_masks, val_images, val_masks = split_tiles_by_index(OUT_IMG, OUT_MSK, INDEX_CSV)
+    train_images, train_masks, val_images, val_masks = split_tiles_by_index(out_img, out_msk, index_csv)
     
     # Define transforms
     train_transform = A.Compose([
@@ -298,32 +321,32 @@ def main():
     train_dataset = TiledSegmentationDataset(
         images=train_images,
         masks=train_masks,
-        tile_size=TILE_SIZE,
+        tile_size=tile_size,
         transform=train_transform
     )
     
     val_dataset = TiledSegmentationDataset(
         images=val_images,
         masks=val_masks,
-        tile_size=TILE_SIZE,
+        tile_size=tile_size,
         transform=val_transform
     )
     
     # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True,
         drop_last=False
     )
     
     val_loader = DataLoader(
         val_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True
     )
     
@@ -335,18 +358,29 @@ def main():
         classes=1
     ).to(device)
     
-    loss_fn = CombinedLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # Initialize loss function with weights
+    loss_fn = CombinedLoss(dice_weight=dice_weight, bce_weight=bce_weight)
+    
+    # Initialize optimizer based on the specified name
+    if optimizer_name.lower() == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    elif optimizer_name.lower() == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    elif optimizer_name.lower() == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    else:
+        print(f"Unknown optimizer: {optimizer_name}, defaulting to Adam")
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     
     # Training loop
     best_iou = 0.0
     train_losses, val_losses = [], []
     train_ious, val_ious = [], []
-    train_dices, val_dices = [], []
-    train_accuracies, val_accuracies = [], []
     
-    for epoch in range(NUM_EPOCHS):
-        print(f"Epoch {epoch + 1}/{NUM_EPOCHS}")
+    print(f"Starting training with: Tile Size={tile_size}, Batch Size={batch_size}, LR={learning_rate}, Optimizer={optimizer_name}")
+    
+    for epoch in range(num_epochs):
+        print(f"Epoch {epoch + 1}/{num_epochs}")
         
         train_metrics = train_one_epoch(model, train_loader, optimizer, loss_fn, device)
         val_metrics = validate(model, val_loader, loss_fn, device)
@@ -356,10 +390,6 @@ def main():
         val_losses.append(val_metrics['loss'])
         train_ious.append(train_metrics['iou'])
         val_ious.append(val_metrics['iou'])
-        train_dices.append(train_metrics['dice'])
-        val_dices.append(val_metrics['dice'])
-        train_accuracies.append(train_metrics['accuracy'])
-        val_accuracies.append(val_metrics['accuracy'])
         
         # Print metrics
         print(f"Train Loss: {train_metrics['loss']:.4f} | "
@@ -371,52 +401,131 @@ def main():
               f"Val Dice: {val_metrics['dice']:.4f} | "
               f"Val Acc: {val_metrics['accuracy']:.4f}")
         
-        # Save best model
+        # Update best IoU
         if val_metrics['iou'] > best_iou:
             best_iou = val_metrics['iou']
-            t0 = time.time()
-            torch.save(model.state_dict(), "best_model.pth")
-            print(f"✅ Saved best model (based on IoU) [took {time.time() - t0:.2f} seconds]")
-        
-        print(f"Epoch {epoch + 1}/{NUM_EPOCHS}, Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
+            
+        print(f"Epoch {epoch + 1}/{num_epochs}, Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
     
-    # Plot results
-    plt.figure(figsize=(12, 10))
+    # Clean up tile directories
+    if out_img.exists():
+        shutil.rmtree(out_img)
+    if out_msk.exists():
+        shutil.rmtree(out_msk)
     
-    plt.subplot(2, 2, 1)
-    plt.plot(range(1, NUM_EPOCHS + 1), train_losses, label='Train Loss', color='blue')
-    plt.plot(range(1, NUM_EPOCHS + 1), val_losses, label='Validation Loss', color='red')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Loss over Epochs')
-    plt.legend()
+    # Return the best validation IoU and the hyperparameters used
+    results = {
+        "best_val_iou": best_iou,
+        "hyperparameters": {
+            "tile_size": tile_size,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "optimizer_name": optimizer_name,
+            "dice_weight": dice_weight,
+            "bce_weight": bce_weight
+        },
+        "training_history": {
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "train_ious": train_ious,
+            "val_ious": val_ious
+        }
+    }
     
-    plt.subplot(2, 2, 2)
-    plt.plot(range(1, NUM_EPOCHS + 1), train_ious, label='Train IoU', color='blue')
-    plt.plot(range(1, NUM_EPOCHS + 1), val_ious, label='Validation IoU', color='red')
-    plt.xlabel('Epochs')
-    plt.ylabel('IoU')
-    plt.title('IoU over Epochs')
-    plt.legend()
-    
-    plt.subplot(2, 2, 3)
-    plt.plot(range(1, NUM_EPOCHS + 1), train_dices, label='Train Dice', color='blue')
-    plt.plot(range(1, NUM_EPOCHS + 1), val_dices, label='Validation Dice', color='red')
-    plt.xlabel('Epochs')
-    plt.ylabel('Dice Coefficient')
-    plt.title('Dice Coefficient over Epochs')
-    plt.legend()
-    
-    plt.subplot(2, 2, 4)
-    plt.plot(range(1, NUM_EPOCHS + 1), train_accuracies, label='Train Accuracy', color='blue')
-    plt.plot(range(1, NUM_EPOCHS + 1), val_accuracies, label='Validation Accuracy', color='red')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.title('Accuracy over Epochs')
-    plt.legend()
-    
-    plt.tight_layout()
-    plt.show()
+    return results
 
+
+# ─── GRID SEARCH FUNCTION ────────────────────────────────────────────────
+def grid_search(
+    tile_sizes=[256, 512, 768],
+    batch_sizes=[2, 4, 8],
+    learning_rates=[1e-4, 5e-4, 1e-3],
+    optimizers=["adam", "adamw"],
+    dice_weights=[1.0],
+    bce_weights=[1.0],
+    num_epochs=15,  # Reduced for grid search
+    seed=100
+):
+    """
+    Perform grid search over the given hyperparameters.
+    
+    Returns:
+        dict: The best results from the grid search
+    """
+    best_result = {
+        "best_val_iou": 0.0,
+        "hyperparameters": None
+    }
+    
+    all_results = []
+    
+    # Create all combinations of hyperparameters
+    param_combinations = list(product(
+        tile_sizes, 
+        batch_sizes, 
+        learning_rates, 
+        optimizers,
+        dice_weights,
+        bce_weights
+    ))
+    
+    print(f"Starting grid search with {len(param_combinations)} parameter combinations")
+    
+    for i, (tile_size, batch_size, lr, optimizer_name, dice_weight, bce_weight) in enumerate(param_combinations):
+        print(f"\n======= Grid Search: {i+1}/{len(param_combinations)} =======")
+        print(f"Parameters: Tile Size={tile_size}, Batch Size={batch_size}, LR={lr}, "
+              f"Optimizer={optimizer_name}, Dice Weight={dice_weight}, BCE Weight={bce_weight}")
+        
+        # Train the model with the current hyperparameters
+        result = train_model_with_hyperparams(
+            tile_size=tile_size,
+            batch_size=batch_size,
+            learning_rate=lr,
+            optimizer_name=optimizer_name,
+            dice_weight=dice_weight,
+            bce_weight=bce_weight,
+            num_epochs=num_epochs,
+            seed=seed
+        )
+        
+        all_results.append(result)
+        
+        # Update best result if better IoU is found
+        if result["best_val_iou"] > best_result["best_val_iou"]:
+            best_result = {
+                "best_val_iou": result["best_val_iou"],
+                "hyperparameters": result["hyperparameters"]
+            }
+            
+            print(f"✅ New best IoU: {best_result['best_val_iou']:.4f} with hyperparameters:")
+            for key, value in best_result["hyperparameters"].items():
+                print(f"  - {key}: {value}")
+    
+    # Save all results to CSV for analysis
+    results_df = []
+    for result in all_results:
+        row = {"best_val_iou": result["best_val_iou"]}
+        row.update(result["hyperparameters"])
+        results_df.append(row)
+        
+    results_df = pd.DataFrame(results_df)
+    results_df.to_csv("grid_search_results.csv", index=False)
+    print(f"Grid search results saved to grid_search_results.csv")
+    
+    return best_result
+
+
+# ─── MAIN EXECUTION ──────────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    best_params = grid_search(
+        tile_sizes=[128, 256, 512, 1024],
+        batch_sizes=[4, 8, 12],
+        learning_rates=[1e-5, 5e-5, 1e-4, 2e-4, 4e-4],
+        optimizers=["adam", "adamw", "sgd"],
+        num_epochs=20
+    )
+    
+    print("\n=== Best Parameters Found ===")
+    print(f"Best Validation IoU: {best_params['best_val_iou']:.4f}")
+    for key, value in best_params["hyperparameters"].items():
+        print(f"{key}: {value}")

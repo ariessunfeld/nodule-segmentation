@@ -309,14 +309,14 @@ def main():
     
     # Visualize predictions
     print("\n=== Training Examples ===")
-    visualize_predictions(model, train_loader, device, num_examples=10, dataset_name="Training Set")
+    visualize_predictions(model, train_loader, device, num_examples=23, dataset_name="Training Set")
     
     print("\n=== Validation Examples ===")
     visualize_predictions(model, val_loader, device, num_examples=5, dataset_name="Validation Set")
     
     # Visualize overlays
     print("\n=== Training Overlay Examples ===")
-    visualize_overlay(model, train_loader, device, num_examples=3, dataset_name="Training Set")
+    visualize_overlay(model, train_loader, device, num_examples=5, dataset_name="Training Set")
     
     print("\n=== Validation Overlay Examples ===")
     visualize_overlay(model, val_loader, device, num_examples=3, dataset_name="Validation Set")
