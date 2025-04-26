@@ -15,7 +15,7 @@ import sys
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 TILE_SIZE = 1024
-BATCH_SIZE = 4
+BATCH_SIZE = 10
 NUM_WORKERS = 0
 OUT_IMG = Path("tiles/images")
 OUT_MSK = Path("tiles/masks")
@@ -164,79 +164,70 @@ def visualize_predictions(model, dataloader, device, num_examples=10, dataset_na
                 count += 1
 
 def visualize_overlay(model, dataloader, device, num_examples=10, dataset_name=""):
-    """Visualize predictions with better overlay visualization"""
+    """Visualize predictions with corrected overlay visualization"""
     model.eval()
     count = 0
-    
+
     with torch.no_grad():
         for images, masks, paths in dataloader:
             if count >= num_examples:
                 break
-                
+
             images = images.to(device)
             outputs = model(images)
-            preds = torch.sigmoid(outputs) > 0.5  # binary threshold
-            
+            preds = torch.sigmoid(outputs) > 0.5  # Boolean tensor
+
             for i in range(images.size(0)):
                 if count >= num_examples:
                     break
-                
-                # Get image, mask, prediction
+
+                # --- Prepare image ---
                 img = images[i].cpu().permute(1, 2, 0).numpy()
                 img = denormalize_image(img)
-                
-                pred_mask = preds[i].cpu().squeeze().numpy()
+
+                # --- Binarize masks ---
                 true_mask = masks[i].cpu().squeeze().numpy()
-                
-                # Extract filename and coordinates
-                tile_path = Path(paths[i])
-                parts = tile_path.stem.split('__')
-                target_name = parts[0]
-                if len(parts) > 1:
-                    coords = parts[1].split('_')
-                    row, col = int(coords[0]), int(coords[1])
-                    title_suffix = f" - Tile ({row}, {col})"
-                else:
-                    title_suffix = ""
-                
-                # Create overlay visualization
-                fig, axs = plt.subplots(1, 4, figsize=(20, 5))
-                
-                # Original image
-                axs[0].imshow(img)
-                axs[0].set_title(f"Original: {target_name}{title_suffix}")
-                
-                # Ground truth overlay
-                img_with_gt = img.copy()
-                img_with_gt[true_mask > 0.5] = [0, 1, 0]  # Green for ground truth
-                axs[1].imshow(img_with_gt)
-                axs[1].set_title("Image + Ground Truth")
-                
-                # Prediction overlay
-                img_with_pred = img.copy()
-                img_with_pred[pred_mask > 0.5] = [1, 0, 0]  # Red for prediction
-                axs[2].imshow(img_with_pred)
-                axs[2].set_title("Image + Prediction")
-                
-                # All overlays
+                gt_bool   = true_mask > 0.5
+
+                pred_bool = preds[i].cpu().squeeze().numpy().astype(bool)
+
+                # --- Build overlays ---
+                # 1) Ground truth overlay
+                img_gt = img.copy()
+                img_gt[gt_bool] = [0, 1, 0]  # green
+
+                # 2) Prediction overlay
+                img_pred = img.copy()
+                img_pred[pred_bool] = [1, 0, 0]  # red
+
+                # 3) Combined (correct / FP / FN)
                 img_all = img.copy()
-                correct = true_mask & pred_mask
-                false_positive = (~true_mask) & pred_mask
-                false_negative = true_mask & (~pred_mask)
-                
-                img_all[correct] = [0, 1, 0]  # Green for correct
-                img_all[false_positive] = [1, 0, 0]  # Red for false positive
-                img_all[false_negative] = [0, 0, 1]  # Blue for false negative
-                axs[3].imshow(img_all)
-                axs[3].set_title("All (G=correct, R=FP, B=FN)")
-                
+                correct       = gt_bool & pred_bool
+                false_positive= (~gt_bool) & pred_bool
+                false_negative= gt_bool & (~pred_bool)
+
+                img_all[correct]        = [0, 1, 0]  # green
+                img_all[false_positive] = [1, 0, 0]  # red
+                img_all[false_negative] = [0, 0, 1]  # blue
+
+                # 4) Get target name from path
+                pth = Path(paths[i])
+                nm = pth.stem.split('__')[0]
+
+                # --- Plot ---
+                fig, axs = plt.subplots(1, 4, figsize=(20, 5))
+                axs[0].imshow(img);       axs[0].set_title(f"Original ({nm.capitalize()})"); 
+                axs[1].imshow(img_gt);    axs[1].set_title("Image + GT"); 
+                axs[2].imshow(img_pred);  axs[2].set_title("Image + Pred"); 
+                axs[3].imshow(img_all);   axs[3].set_title("Combined (G=✓, R=FP, B=FN)")
+
                 for ax in axs:
                     ax.axis("off")
-                    
-                plt.suptitle(f"{dataset_name} - Overlay Example {count + 1}", fontsize=16)
+
+                plt.suptitle(f"{dataset_name} - Overlay Example {count+1}", fontsize=16)
                 plt.tight_layout()
                 plt.show()
-                
+
                 count += 1
 
 # ─── MAIN EXECUTION ──────────────────────────────────────────────────────
@@ -309,17 +300,17 @@ def main():
     
     # Visualize predictions
     print("\n=== Training Examples ===")
-    visualize_predictions(model, train_loader, device, num_examples=23, dataset_name="Training Set")
+    visualize_predictions(model, train_loader, device, num_examples=50, dataset_name="Training Set")
     
     print("\n=== Validation Examples ===")
-    visualize_predictions(model, val_loader, device, num_examples=5, dataset_name="Validation Set")
+    visualize_predictions(model, val_loader, device, num_examples=50, dataset_name="Validation Set")
     
     # Visualize overlays
     print("\n=== Training Overlay Examples ===")
-    visualize_overlay(model, train_loader, device, num_examples=5, dataset_name="Training Set")
+    visualize_overlay(model, train_loader, device, num_examples=50, dataset_name="Training Set")
     
     print("\n=== Validation Overlay Examples ===")
-    visualize_overlay(model, val_loader, device, num_examples=3, dataset_name="Validation Set")
+    visualize_overlay(model, val_loader, device, num_examples=50, dataset_name="Validation Set")
 
 if __name__ == "__main__":
     main()

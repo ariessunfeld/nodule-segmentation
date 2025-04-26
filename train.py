@@ -18,10 +18,10 @@ import cv2
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 # These can be easily changed
-TILE_SIZE = 512
+TILE_SIZE = 1024
 BATCH_SIZE = 4
 LEARNING_RATE = 5e-4
-NUM_EPOCHS = 50
+NUM_EPOCHS = 80
 SEED = 100
 NUM_WORKERS = 0
 IMG_DIR = Path("data/tifs")
