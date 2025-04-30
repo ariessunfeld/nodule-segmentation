@@ -19,13 +19,13 @@ import cv2
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 TILE_SIZE        = 1024
-BATCH_SIZE       = 8
-LEARNING_RATE    = 5e-4
-MIN_LEARNING_RATE= 5e-6
-NUM_EPOCHS       = 120
-WARMUP_EPOCHS    = 20      # ← Number of epochs to linearly warm up
-FACTOR           = 0.85    # ← LR reduction factor
-PATIENCE         = 8       # ← LR reduction patience
+BATCH_SIZE       = 14
+LEARNING_RATE    = 1e-4
+MIN_LEARNING_RATE= 1e-5
+NUM_EPOCHS       = 300
+WARMUP_EPOCHS    = 30      # ← Number of epochs to linearly warm up
+FACTOR           = 0.7      # ← LR reduction factor
+PATIENCE         = 6        # ← LR reduction patience
 SEED             = 100
 NUM_WORKERS      = 0
 IMG_DIR          = Path("data/tifs")
@@ -114,8 +114,10 @@ def split_tiles_by_index(img_tiles_dir, msk_tiles_dir, index_csv):
         orig = img_path.stem.split('__')[0]
         if orig in val_targets:
             val_imgs.append(img_path)
-        else:
+        elif orig in train_targets:
             train_imgs.append(img_path)
+        else:
+            print(f"⚠️ No target for {orig}, skipping")
 
     train_msks = [msk_tiles_dir / f"{p.stem}.png" for p in train_imgs]
     val_msks   = [msk_tiles_dir / f"{p.stem}.png" for p in val_imgs]
